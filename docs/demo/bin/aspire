@@ -1,0 +1,29 @@
+#!/bin/sh
+# A fake Aspire CLI for the demo. It answers the two calls that
+# examples/reclaim-merged/.herdr-gc/stop-apphosts.sh makes:
+#
+#   aspire ps --format Json ...     one AppHost per checkout under $DEMO_WTS
+#                                   that has src/AppHost/*.csproj and is not stopped
+#   aspire stop --apphost <path>    marks that AppHost stopped
+stopped="${DEMO_STATE:?}/aspire-stopped"
+touch "$stopped"
+case "$1" in
+  ps)
+    printf '['
+    sep=
+    for f in "${DEMO_WTS:?}"/*/*/src/AppHost/*.csproj; do
+      [ -f "$f" ] || continue
+      grep -qxF "$f" "$stopped" && continue
+      printf '%s{"appHostPath":"%s"}' "$sep" "$f"
+      sep=,
+    done
+    printf ']\n'
+    ;;
+  stop)
+    while [ $# -gt 0 ]; do
+      [ "$1" = --apphost ] && { echo "$2" >>"$stopped"; echo "Stopped AppHost $(basename "$2")."; }
+      shift
+    done
+    ;;
+  *) echo "fake aspire: $*" >&2; exit 1 ;;
+esac

@@ -1,0 +1,11 @@
+#!/bin/sh
+# A fake `yarn install` for the demo: prints what yarn 1 prints, a little
+# slowly, and writes nothing.
+[ "${1:-install}" = install ] || { echo "fake yarn: only install" >&2; exit 1; }
+echo "yarn install v1.22.22"
+for step in "[1/4] Resolving packages..." "[2/4] Fetching packages..." \
+  "[3/4] Linking dependencies..." "[4/4] Building fresh packages..."; do
+  sleep "${DEMO_YARN_DELAY:-0.4}"
+  echo "$step"
+done
+echo "Done in 1.84s."

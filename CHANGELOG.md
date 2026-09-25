@@ -5,6 +5,11 @@ All notable changes appear in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A README banner GIF of the HUD, and `docs/demo/`, which records it again
+  in a fictional world with no herdr and no network.
+
 ## [0.1.0] - 2026-09-25
 
 First public release. The plugin id is `h3xept.herdr-gc`.

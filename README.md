@@ -1,5 +1,9 @@
 # herdr-gc
 
+<div align="center">
+  <img src="docs/hud.gif" alt="The herdr-gc popup: three pending suggestions over the recent runs. Accepting 'delete checkout' for a merged worktree removes it and runs the remove event. Trusting a new config replays the open event it blocked, and yarn install runs." width="100%">
+</div>
+
 Run your own commands when a git worktree is created, opened, closed or
 removed in [herdr](https://herdr.dev). You decide per step whether it runs
 automatically, is only suggested, or waits for you. An optional classifier
@@ -353,6 +357,19 @@ npm test         # node:test, offline: a fake herdr, temp git repos, a fake gh
 See [AGENTS.md](AGENTS.md) for the module map and the invariants,
 [docs/architecture.md](docs/architecture.md) for the design, and
 [docs/design.md](docs/design.md) for how the design was reviewed.
+
+`docs/demo/` builds a fictional world with fake `gh`, `yarn`, `aspire` and
+`herdr` binaries under `/tmp/herdr-gc-demo`. Try the HUD in it with no herdr
+and no network:
+
+```sh
+source docs/demo/env.sh
+herdr-gc hud
+```
+
+To record `docs/hud.gif` again, install [VHS](https://github.com/charmbracelet/vhs)
+and `gifsicle`, then run `bash docs/demo/record.sh`. See
+[docs/demo/README.md](docs/demo/README.md).
 
 ## Credits
 

@@ -1,0 +1,20 @@
+#!/bin/sh
+# A fake GitHub CLI for the demo. It answers only the call that
+# examples/reclaim-merged/.herdr-gc/classify.sh makes:
+#
+#   gh pr list --head <branch> --state merged ... --jq ...
+#
+# and prints what that --jq filter prints: "<number> <mergedAt>" for a merged
+# pull request, or nothing.
+branch=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --head) branch="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$branch" in
+  feat-checkout) echo "412 2026-01-12T09:30:00Z" ;;
+  docs-refresh) echo "409 2026-01-08T16:05:00Z" ;;
+esac
+exit 0

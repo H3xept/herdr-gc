@@ -1,0 +1,8 @@
+#!/bin/sh
+# A fake herdr binary for the demo. herdr-gc reaches it through
+# HERDR_BIN_PATH. No workspace is open, and notifications go to a log.
+case "$1 $2" in
+  "workspace list") echo '{"id":"demo","result":{"type":"workspace_list","workspaces":[]}}' ;;
+  "notification show") shift 2; printf '%s\n' "$*" >>"${DEMO_STATE:?}/notifications.log" ;;
+  *) echo "fake herdr: $*" >&2; exit 1 ;;
+esac
