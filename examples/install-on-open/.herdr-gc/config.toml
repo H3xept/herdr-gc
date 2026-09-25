@@ -1,0 +1,16 @@
+# The smallest useful config: install dependencies when herdr creates a
+# worktree, and offer to do it again when herdr opens an existing one.
+version = 1
+
+[[step]]
+name = "install"
+on = "create"
+run = "npm ci"
+timeout = "15m"
+
+[[step]]
+name = "reinstall"
+on = "open"
+mode = "suggest"
+run = "npm ci"
+timeout = "15m"

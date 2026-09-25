@@ -1,0 +1,364 @@
+#!/usr/bin/env node
+// herdr-gc — worktree lifecycle steps for herdr.
+//
+// Every verb works from a shell. The manifest's event hooks, actions and pane
+// call the same verbs, so the HUD and the keybindings add no behavior of
+// their own.
+import { existsSync, readFileSync } from 'node:fs';
+import { constants } from 'node:os';
+import { basename, join, resolve } from 'node:path';
+import { stopActive } from '../lib/exec.mjs';
+import { FOLDER, findConfigDir, isTrusted, loadConfig } from '../lib/config.mjs';
+import { PLUGIN_ID, insideHerdr, pluginContext, settings } from '../lib/env.mjs';
+import { checkoutOf, describeCheckout } from '../lib/git.mjs';
+import { notify, openPane } from '../lib/herdr.mjs';
+import { runHud } from '../lib/hud.mjs';
+import { EVENTS, ago, fromHerdrEvent, worktreeId } from '../lib/model.mjs';
+import {
+  accept, dismiss, executeRun, label, latestSuggestions, preview, queueRun, reconcile, runNamedStep, spawnWorker, sweep,
+} from '../lib/runner.mjs';
+import {
+  listRecords, listRuns, listSuggestions, listTrust, logPath, readRun, removeTrust, setTrust,
+} from '../lib/state.mjs';
+
+// package.json is the one version source; herdr-plugin.toml repeats it, and a
+// test keeps the two equal.
+const { version: VERSION } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+const HELP = `herdr-gc ${VERSION} — worktree lifecycle steps for herdr
+
+USAGE
+  herdr-gc <verb> [args]
+
+  [path] is a checkout or a directory inside one. It defaults to the
+  checkout of the invoking herdr workspace, then of the current directory.
+
+LIFECYCLE
+  run <event> [path]      run an event now, as the hook would: auto steps
+                          run, suggest steps queue, manual steps skip.
+                          Events: ${EVENTS.join(', ')}. --detach returns at once.
+  run-step <name> [path]  run one step now, whatever its mode or event
+  sweep [path]            run the sweep event on every linked worktree of the
+                          repo that no workspace has open. --dry-run only
+                          classifies and prints the plan. --jobs N (default 4)
+
+SUGGESTIONS
+  pending [--json]        list pending suggestions
+  accept <id…>            run suggestions; or --latest (the newest run's),
+                          --here (this worktree's), --all
+  dismiss <id…>           drop suggestions; same selectors as accept
+
+TRUST
+  trust [path]            trust the .herdr-gc folder that applies to path, as
+                          it is now; also takes the folder itself
+  untrust [path]          forget that trust
+  trusted                 list trusted folders
+
+INSPECT
+  check [path]            validate the config and show what each event does;
+                          --event E also runs E's classifier, but no step
+  status [path]           a worktree's record, pending suggestions, last runs;
+                          with no worktree, every recent run
+  log [run|path]          print a run log (default: the newest run)
+  hud                     the interactive popup (open-hud asks herdr for it)
+
+INTERNAL
+  hook                    entry point for herdr [[events]] hooks
+  worker <run>            execute a queued run
+  reconcile               mark runs whose worker died as interrupted
+  version, help
+
+Config: .herdr-gc/config.toml in the checkout, an ancestor directory, or the
+repo root. See README.md.`;
+
+// --- arguments -----------------------------------------------------------------
+
+function parseArgs(argv) {
+  const flags = {};
+  const rest = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--jobs' || a === '--event') flags[a.slice(2)] = argv[++i];
+    else if (a.startsWith('--')) flags[a.slice(2)] = true;
+    else rest.push(a);
+  }
+  return { flags, rest };
+}
+
+/** The checkout a verb is about, with its git facts. */
+function target(pathArg, { here = false } = {}) {
+  const ctx = pluginContext();
+  let path;
+  if (pathArg && !here) {
+    const abs = resolve(pathArg);
+    path = existsSync(abs) ? (checkoutOf(abs) ?? abs) : abs;
+  } else {
+    path = ctx.worktree?.checkout_path ?? checkoutOf(ctx.workspace_cwd ?? process.cwd());
+  }
+  if (!path) throw new Error('not inside a git checkout; pass a path');
+  const base = { path, repoRoot: '', branch: '', linked: false, workspaceId: ctx.workspace_id ?? '' };
+  if (!existsSync(path)) return base;
+  try { return { ...base, ...describeCheckout(path) }; } catch { return base; }
+}
+
+const out = process.stdout;
+const print = (text = '') => out.write(`${text}\n`);
+
+/** Inside herdr an action has no terminal, so its result also becomes a notification. */
+async function tell(title, lines) {
+  for (const l of lines) print(l);
+  if (insideHerdr() && lines.length) await notify(title, lines.join('\n'));
+}
+
+// --- verbs ---------------------------------------------------------------------
+
+async function hook() {
+  let envelope;
+  try { envelope = JSON.parse(process.env.HERDR_PLUGIN_EVENT_JSON || ''); } catch {
+    throw new Error('hook: HERDR_PLUGIN_EVENT_JSON is missing or not JSON');
+  }
+  const t = fromHerdrEvent(envelope);
+  if (t.ignore) { print(`ignored: ${t.ignore}`); return; }
+  const run = queueRun(t, 'herdr');
+  const pid = spawnWorker(run);
+  print(`queued ${t.event} for ${t.path} (run ${run.id}, worker ${pid})`);
+}
+
+async function runVerb(event, pathArg, flags) {
+  if (!EVENTS.includes(event)) throw new Error(`unknown event "${event ?? ''}"; use ${EVENTS.join(', ')}`);
+  const t = target(pathArg, flags);
+  const run = queueRun({ ...t, event }, 'cli');
+  if (flags.detach) {
+    spawnWorker(run);
+    print(`queued ${event} for ${t.path} (run ${run.id}); herdr-gc log ${run.id}`);
+    return;
+  }
+  const done = await executeRun(run.id, { out });
+  print(`${done.state}${done.note ? `: ${done.note}` : ''}`);
+  if (done.state === 'failed') process.exitCode = 1;
+}
+
+function pickSuggestions(ids, flags) {
+  const all = listSuggestions();
+  if (flags.all) return all;
+  if (flags.latest) return latestSuggestions();
+  if (flags.here) {
+    const id = worktreeId(target(null, { here: true }).path);
+    return all.filter((s) => s.worktreeId === id);
+  }
+  if (!ids.length) throw new Error('name suggestion ids, or use --latest, --here or --all');
+  return ids.map((id) => all.find((s) => s.id === id) ?? { id, missing: true });
+}
+
+async function acceptVerb(ids, flags) {
+  const picked = pickSuggestions(ids, flags);
+  if (picked.length === 0) { await tell('herdr-gc', ['nothing pending']); return; }
+  const lines = [];
+  let failed = 0;
+  for (const s of picked) {
+    if (s.missing) { lines.push(`${s.id}: no such pending suggestion`); failed++; continue; }
+    print(`» ${label(s.path)}: ${s.kind === 'event' ? `replay ${s.event}` : s.step}`);
+    const r = await accept(s.id, { out });
+    if (!r.ok) failed++;
+    lines.push(`${r.ok ? '✓' : '✗'} ${label(s.path)}: ${r.message}`);
+  }
+  await tell(`${failed ? '✗' : '✓'} herdr-gc accept`, lines);
+  if (failed) process.exitCode = 1;
+}
+
+async function dismissVerb(ids, flags) {
+  const picked = pickSuggestions(ids, flags);
+  const lines = picked.map((s) => `${dismiss(s.id) ? 'dismissed' : 'not pending'} ${s.id}${s.path ? ` (${label(s.path)} ${s.step ?? s.event})` : ''}`);
+  await tell('herdr-gc dismiss', lines.length ? lines : ['nothing pending']);
+}
+
+function pendingVerb(flags) {
+  const all = listSuggestions();
+  if (flags.json) { print(JSON.stringify(all, null, 2)); return; }
+  if (all.length === 0) { print('nothing pending'); return; }
+  for (const s of all) {
+    const what = s.kind === 'event' ? `replay ${s.event} (config not trusted)` : `${s.event}: ${s.step}`;
+    print(`${s.id}  ${label(s.path).padEnd(24)} ${what}${s.verdict ? `  [${s.verdict}${s.reason ? `: ${s.reason}` : ''}]` : ''}  ${ago(s.createdAt)}`);
+  }
+  print('');
+  print('herdr-gc accept <id…> | --latest | --all     herdr-gc dismiss <id…>');
+}
+
+/** A path, a checkout, or a .herdr-gc folder -> the folder. */
+function configDirFor(pathArg, flags) {
+  if (pathArg) {
+    const abs = resolve(pathArg);
+    if (basename(abs) === FOLDER && existsSync(join(abs, 'config.toml'))) return abs;
+    if (existsSync(join(abs, FOLDER, 'config.toml'))) return join(abs, FOLDER);
+  }
+  const t = target(pathArg, flags);
+  const dir = findConfigDir(t.path, t.repoRoot);
+  if (!dir) throw new Error(`no ${FOLDER}/config.toml applies to ${t.path}`);
+  return dir;
+}
+
+async function trustVerb(pathArg, flags) {
+  const dir = configDirFor(pathArg, flags);
+  const cfg = loadConfig(dir); // refuses an invalid config
+  setTrust(cfg.configDir, cfg.hash);
+  const blocked = listSuggestions().filter((s) => s.kind === 'event' && s.configDir === cfg.configDir);
+  const lines = [`trusted ${cfg.configDir} (${cfg.hash.slice(0, 12)})`];
+  lines.push(`${cfg.config.steps.length} steps, classifiers for: ${Object.keys(cfg.config.classifiers).join(', ') || 'none'}`);
+  if (settings().HERDR_GC_TRUST === 'all') lines.push('note: HERDR_GC_TRUST=all trusts every folder anyway');
+  for (const s of blocked) lines.push(`blocked ${s.event} for ${label(s.path)}: herdr-gc accept ${s.id}`);
+  await tell('herdr-gc trust', lines);
+}
+
+function untrustVerb(pathArg, flags) {
+  const dir = configDirFor(pathArg, flags);
+  print(removeTrust(dir) ? `untrusted ${dir}` : `${dir} was not trusted`);
+}
+
+async function checkVerb(pathArg, flags) {
+  const t = target(pathArg, flags);
+  const events = flags.event ? [flags.event] : EVENTS;
+  for (const e of events) if (!EVENTS.includes(e)) throw new Error(`unknown event "${e}"`);
+  const p0 = await preview({ ...t, event: events[0] }, { classify: Boolean(flags.event) });
+  if (!p0.configDir) { print(`no ${FOLDER}/config.toml applies to ${t.path}`); return; }
+  print(`worktree  ${t.path}${t.linked ? ' (linked)' : ''}${t.branch ? ` on ${t.branch}` : ''}`);
+  print(`config    ${p0.configDir}`);
+  print(`hash      ${p0.hash.slice(0, 12)}  ${p0.trusted ? 'trusted' : `NOT trusted: herdr-gc trust ${p0.configDir}`}`);
+  for (const e of events) {
+    const p = e === events[0] ? p0 : await preview({ ...t, event: e }, { classify: false });
+    const cls = p.config.classifiers[e];
+    if (!cls && p.plan.length === 0) continue;
+    print('');
+    print(`${e}${cls ? `  classifier: ${cls.run.split('\n')[0]}` : ''}`);
+    if (flags.event && cls) print(`  verdict: ${p.verdict ?? '(not run: config not trusted)'}${p.reason ? ` (${p.reason})` : ''}`);
+    for (const { step, action, why } of p.plan) {
+      const gate = step.when ? ` when ${step.when.join('|')}` : '';
+      const shown = flags.event && cls ? action : step.mode === 'manual' ? 'manual' : step.mode;
+      print(`  ${shown.padEnd(8)} ${step.name}${gate}${flags.event && why ? `  (${why})` : ''}`);
+    }
+  }
+}
+
+function statusVerb(pathArg, flags) {
+  const lost = reconcile();
+  if (lost.length) print(`marked ${lost.length} run(s) interrupted`);
+  let id = null;
+  try { id = worktreeId(target(pathArg, flags).path); } catch { /* not in a checkout */ }
+  const record = id && listRecords().find((r) => r.id === id);
+  const runs = listRuns().filter((r) => !id || !record || r.worktreeId === id).slice(0, 15);
+  if (record) {
+    print(`worktree  ${record.path}`);
+    print(`repo      ${record.repoRoot || '?'}   branch ${record.branch || '?'}   generation ${record.generation}${record.removedAt ? '   removed' : ''}`);
+    print(`config    ${record.configDir ?? 'none'}${record.configDir ? `  ${isTrusted(record.configDir, record.configHash) ? 'trusted' : 'not trusted'}` : ''}`);
+    print('');
+  }
+  const pending = listSuggestions().filter((s) => !record || s.worktreeId === id);
+  print(`pending   ${pending.length}${pending.length ? '   (herdr-gc pending)' : ''}`);
+  print('');
+  for (const r of runs) {
+    const ran = (r.steps ?? []).filter((s) => s.action !== 'skip' && s.action !== 'not-reached')
+      .map((s) => `${s.action === 'suggest' ? '?' : s.ok ? '✓' : '✗'}${s.name}`).join(' ');
+    print(`${r.id}  ${r.state.padEnd(11)} ${r.event.padEnd(6)} ${label(r.path).padEnd(24)} ${ago(r.createdAt).padEnd(8)} ${r.verdict ?? ''} ${ran}`);
+  }
+  if (runs.length === 0) print('no runs yet');
+}
+
+function logVerb(arg, flags) {
+  let run = arg && readRun(arg);
+  if (!run) {
+    const runs = listRuns();
+    if (arg || flags.here) {
+      const id = worktreeId(target(arg, flags).path);
+      run = runs.find((r) => r.worktreeId === id);
+    } else {
+      run = runs[0];
+    }
+  }
+  if (!run) throw new Error('no run found');
+  print(`run ${run.id}: ${run.state}${run.note ? ` (${run.note})` : ''}`);
+  try { out.write(readFileSync(logPath(run.id), 'utf8')); } catch { print('(no log)'); }
+}
+
+async function sweepVerb(pathArg, flags) {
+  const t = target(pathArg, flags);
+  const repo = t.repoRoot || t.path;
+  const jobs = Number.parseInt(flags.jobs ?? settings().HERDR_GC_SWEEP_JOBS, 10) || 4;
+  print(`${flags['dry-run'] ? 'dry run: ' : ''}sweeping the linked worktrees of ${repo}`);
+  const results = await sweep(repo, {
+    dryRun: Boolean(flags['dry-run']),
+    jobs,
+    out,
+    onResult: (r) => {
+      const plan = (r.plan ?? []).filter((x) => x.action !== 'skip').map((x) => `${x.action} ${x.name}`).join(', ');
+      print(`${r.state.padEnd(10)} ${label(r.path).padEnd(28)} ${(r.verdict ?? '').padEnd(8)} ${r.reason ?? ''}${plan ? `  → ${plan}` : ''}`);
+    },
+  });
+  const suggested = results.reduce((n, r) => n + (r.plan ?? []).filter((x) => x.action === 'suggest').length, 0);
+  await tell('herdr-gc sweep', [`${results.length} worktrees, ${suggested} suggestions${suggested && !flags['dry-run'] ? ' (herdr-gc pending)' : ''}`]);
+}
+
+// Steps run in their own process groups, so a Ctrl-C on a foreground run, or
+// a SIGTERM to a worker, reaches only this process. Pass it on, then exit.
+// The run record stays `running`; `reconcile` marks it `interrupted`.
+function forwardSignals() {
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.once(sig, async () => {
+      await stopActive();
+      process.exit(128 + constants.signals[sig]);
+    });
+  }
+}
+
+async function main() {
+  const [verb, ...args] = process.argv.slice(2);
+  const { flags, rest } = parseArgs(args);
+  if (verb !== 'hud') forwardSignals();
+  switch (verb) {
+    case 'hook': await hook(); break;
+    case 'worker': {
+      const run = await executeRun(rest[0]);
+      if (run.state === 'failed') process.exitCode = 1;
+      break;
+    }
+    case 'run': await runVerb(rest[0], rest[1], flags); break;
+    case 'run-step': {
+      if (!rest[0]) throw new Error('run-step needs a step name');
+      const done = await runNamedStep(target(rest[1], flags), rest[0], { out });
+      print(`${done.state}${done.note ? `: ${done.note}` : ''}`);
+      if (done.state !== 'done') process.exitCode = 1;
+      break;
+    }
+    case 'sweep': await sweepVerb(rest[0], flags); break;
+    case 'pending': pendingVerb(flags); break;
+    case 'accept': await acceptVerb(rest, flags); break;
+    case 'dismiss': await dismissVerb(rest, flags); break;
+    case 'trust': await trustVerb(rest[0], flags); break;
+    case 'untrust': untrustVerb(rest[0], flags); break;
+    case 'trusted':
+      for (const t of listTrust()) print(`${t.hash.slice(0, 12)}  ${t.dir}${existsSync(t.dir) ? '' : '  (gone)'}`);
+      break;
+    case 'check': await checkVerb(rest[0], flags); break;
+    case 'status': statusVerb(rest[0], flags); break;
+    case 'log': logVerb(rest[0], flags); break;
+    case 'reconcile': {
+      const lost = reconcile();
+      if (lost.length) {
+        await tell('✗ herdr-gc', [`${lost.length} run(s) were interrupted: ${lost.map((r) => `${r.event} ${label(r.path)}`).join(', ')}`, 'herdr-gc status']);
+      }
+      break;
+    }
+    case 'hud': process.exit(await runHud()); break;
+    case 'open-hud': await openPane(PLUGIN_ID, 'hud'); break;
+    case 'version': print(VERSION); break;
+    case undefined: case 'help': case '--help': case '-h': print(HELP); break;
+    default:
+      process.stderr.write(`unknown verb "${verb}"\n\n${HELP}\n`);
+      process.exit(2);
+  }
+}
+
+main().catch(async (e) => {
+  const message = e?.message || String(e);
+  process.stderr.write(`${message}\n`);
+  if (insideHerdr()) await notify('✗ herdr-gc', message.split('\n').slice(0, 6).join('\n'));
+  process.exit(1);
+});

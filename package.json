@@ -1,0 +1,45 @@
+{
+  "name": "herdr-gc",
+  "version": "0.1.0",
+  "description": "herdr plugin: run, suggest or classify your own commands when a git worktree is created, opened, closed or removed",
+  "license": "MIT",
+  "author": "H3xept",
+  "homepage": "https://github.com/H3xept/herdr-gc#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/H3xept/herdr-gc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/H3xept/herdr-gc/issues"
+  },
+  "type": "module",
+  "bin": {
+    "herdr-gc": "bin/herdr-gc"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "examples/",
+    "herdr-plugin.toml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "check": "for f in bin/herdr-gc lib/*.mjs; do node --check \"$f\" || exit 1; done",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "herdr",
+    "herdr-plugin",
+    "git-worktree",
+    "worktree",
+    "lifecycle",
+    "hooks",
+    "cleanup",
+    "plugin"
+  ]
+}

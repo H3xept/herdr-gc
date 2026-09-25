@@ -1,0 +1,57 @@
+# Example: set a worktree up when it opens; on close, stop what runs in it and
+# offer to delete the checkout once its pull request is merged.
+#
+# Copy this folder next to your worktrees (or into a repo), review it, then:
+#   herdr-gc trust path/to/.herdr-gc
+#   herdr-gc check path/to/a/worktree
+
+version = 1
+
+# Install dependencies whenever herdr creates or opens the worktree.
+[[step]]
+name = "install"
+description = "Install JavaScript dependencies"
+on = ["create", "open"]
+mode = "auto"
+timeout = "20m"
+run = """
+if [ -f yarn.lock ]; then yarn install
+elif [ -f pnpm-lock.yaml ]; then pnpm install
+elif [ -f package-lock.json ]; then npm ci
+else echo "no lockfile; nothing to install"
+fi
+"""
+
+# One classifier for close and sweep. It prints `reclaim` or `keep`, with a
+# reason; see classify.sh.
+[[classifier]]
+on = ["close", "sweep"]
+run = '"$HERDR_GC_DIR/classify.sh"'
+timeout = "2m"
+
+# Stop the Aspire AppHosts that run from this checkout. Runs on every close,
+# whatever the verdict: a closed worktree needs no running stack.
+[[step]]
+name = "stop apphosts"
+description = "aspire stop for every AppHost inside the checkout (never --force)"
+on = "close"
+mode = "auto"
+timeout = "3m"
+continue_on_error = true
+run = '"$HERDR_GC_DIR/stop-apphosts.sh"'
+
+# Delete the checkout, only when the classifier said reclaim, and only when
+# you accept. `git worktree remove` refuses a dirty checkout; the branch stays.
+# herdr-gc runs the `remove` event after it sees the checkout gone.
+[[step]]
+name = "delete checkout"
+description = "git worktree remove (the branch is kept)"
+on = ["close", "sweep"]
+when = "reclaim"
+mode = "suggest"
+run = 'git -C "$HERDR_GC_REPO_ROOT" worktree remove "$HERDR_GC_WORKTREE"'
+
+[[step]]
+name = "say goodbye"
+on = "remove"
+run = 'echo "removed $HERDR_GC_WORKTREE ($HERDR_GC_BRANCH)"'

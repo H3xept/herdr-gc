@@ -1,0 +1,98 @@
+# herdr-gc — run your own steps when a git worktree is created, opened,
+# closed or removed.
+# https://github.com/H3xept/herdr-gc
+#
+# Link it from a checkout:   herdr plugin link /path/to/this/repo
+#
+# Node >= 20, no dependencies. The steps themselves live in a `.herdr-gc/`
+# folder next to your worktrees; see README.md.
+
+id = "h3xept.herdr-gc"
+name = "herdr-gc"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Worktree lifecycle steps: run, suggest or classify commands on create, open, close and remove"
+platforms = ["linux", "macos"]
+
+# Marks runs whose worker died (a reboot, a kill) as interrupted and says so.
+# herdr-gc never replays a lifecycle event by itself.
+[[startup]]
+command = ["node", "bin/herdr-gc", "reconcile"]
+
+# Lifecycle events. Each hook queues a run, starts a detached worker and
+# exits, so a 20-minute install never holds a herdr hook.
+[[events]]
+on = "worktree.created"
+command = ["node", "bin/herdr-gc", "hook"]
+
+[[events]]
+on = "worktree.opened"
+command = ["node", "bin/herdr-gc", "hook"]
+
+[[events]]
+on = "workspace.closed"
+command = ["node", "bin/herdr-gc", "hook"]
+
+[[events]]
+on = "worktree.removed"
+command = ["node", "bin/herdr-gc", "hook"]
+
+# The HUD: pending suggestions and recent runs. A helper only: every key maps
+# to a verb that also exists as a CLI command.
+[[panes]]
+id = "hud"
+title = "herdr-gc"
+placement = "popup"
+width = "90%"
+height = "80%"
+command = ["node", "bin/herdr-gc", "hud"]
+
+[[actions]]
+id = "open"
+title = "herdr-gc: open the HUD"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "bin/herdr-gc", "open-hud"]
+
+# Accepts the suggestions of the newest run that still has some: the ones
+# the last notification named. Bind it to answer a notification with a key.
+[[actions]]
+id = "accept-latest"
+title = "herdr-gc: accept the latest suggestions"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "bin/herdr-gc", "accept", "--latest"]
+
+[[actions]]
+id = "dismiss-latest"
+title = "herdr-gc: dismiss the latest suggestions"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "bin/herdr-gc", "dismiss", "--latest"]
+
+[[actions]]
+id = "accept-here"
+title = "herdr-gc: accept this worktree's suggestions"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/herdr-gc", "accept", "--here"]
+
+# Trusts the .herdr-gc folder of this worktree as it is now. Review the
+# folder first: trusting lets its commands run.
+[[actions]]
+id = "trust-here"
+title = "herdr-gc: trust this worktree's .herdr-gc folder"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/herdr-gc", "trust", "--here"]
+
+# Runs the `open` event for this worktree again, for example after a failed
+# install.
+[[actions]]
+id = "run-open-here"
+title = "herdr-gc: run the open steps here again"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/herdr-gc", "run", "open", "--here", "--detach"]
+
+# Runs the `sweep` event on every linked worktree of this repo that no
+# workspace has open, and reports the suggestions it queued.
+[[actions]]
+id = "sweep-here"
+title = "herdr-gc: sweep this repo's closed worktrees"
+contexts = ["workspace", "pane"]
+command = ["node", "bin/herdr-gc", "sweep", "--here"]

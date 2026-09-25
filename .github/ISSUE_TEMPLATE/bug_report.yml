@@ -1,0 +1,79 @@
+name: Bug report
+description: A hook, a step, a suggestion, trust or the HUD does something wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Remove paths, tokens and secrets from everything
+        you paste. For a security problem, do not use this form: see
+        SECURITY.md.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that shows the problem.
+      placeholder: |
+        1. Trust a `.herdr-gc` folder with one `suggest` step on `remove`.
+        2. Remove a worktree in herdr.
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant `.herdr-gc/config.toml`
+      description: |
+        The steps that take part in the problem. Remove secrets, tokens and
+        private paths from commands.
+      render: toml
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `bin/herdr-gc status`
+      description: |
+        Run it with the worktree path, for example `bin/herdr-gc status <path>`.
+        It shows the worktree record, pending suggestions and the last runs.
+      render: text
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Output of `bin/herdr-gc log <run>`
+      description: The log of the run that went wrong. Remove secrets.
+      render: text
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Output of `bin/herdr-gc version`.
+    validations:
+      required: true
+
+  - type: input
+    id: herdr-version
+    attributes:
+      label: herdr version
+      description: Output of `herdr --version`.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, Node and git versions, for example `macOS 15, Node 22.4, git 2.46`.
+    validations:
+      required: true

@@ -1,0 +1,89 @@
+#!/usr/bin/env node
+// activity-since <unix-seconds>: was there agent activity in this checkout
+// after that time? Prints `idle`, or `active <reason>`.
+//
+// classify.sh calls this file when it is named `activity-since` and is
+// executable. Rename it to turn it on:
+//
+//   mv activity-since.example activity-since && chmod +x activity-since
+//
+// It looks for agent session files (*.json, *.jsonl) under the directories in
+// AGENT_SESSION_DIRS (colon-separated, three levels deep at most). A file
+// counts when it was created (ACTIVITY=started, the default) or last written
+// (ACTIVITY=modified) after the given time, and one of its first 20 JSON
+// lines has a working-directory field (`cwd`, `workdir`, `working_directory`
+// or `workingDirectory`, at the top level or one level down) that is the
+// checkout or a directory inside it. A file that only mentions the path, such
+// as a tool log, does not count. Set AGENT_SESSION_DIRS where you run herdr,
+// or hard-code it below.
+import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
+const since = Number(process.argv[2]) * 1000;
+const checkout = process.env.HERDR_GC_WORKTREE;
+if (!since || !checkout) process.exit(2);
+const dirs = (process.env.AGENT_SESSION_DIRS ?? '').split(':').filter(Boolean);
+const mode = process.env.ACTIVITY === 'modified' ? 'modified' : 'started';
+
+const CWD_KEYS = ['cwd', 'workdir', 'working_directory', 'workingDirectory'];
+const inCheckout = (value) => typeof value === 'string'
+  && (value.replace(/\/+$/, '') === checkout || value.startsWith(`${checkout}/`));
+
+function head(file) {
+  const fd = openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    return buf.subarray(0, readSync(fd, buf, 0, buf.length, 0)).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** True when the file's first JSON lines name the checkout as the working directory. */
+function sessionIn(file) {
+  for (const line of head(file).split('\n').slice(0, 20)) {
+    let doc;
+    try { doc = JSON.parse(line); } catch { continue; }
+    if (!doc || typeof doc !== 'object') continue;
+    for (const obj of [doc, ...Object.values(doc).filter((v) => v && typeof v === 'object')]) {
+      if (CWD_KEYS.some((k) => inCheckout(obj[k]))) return true;
+    }
+  }
+  return false;
+}
+
+// A file whose creation time the filesystem does not keep reports 0; fall
+// back to the modification time then.
+const when = (st) => (mode === 'started' && st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs);
+
+function scan(dir, depth) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (depth > 0) {
+        const hit = scan(full, depth - 1);
+        if (hit) return hit;
+      }
+      continue;
+    }
+    if (!e.isFile() || !/\.jsonl?$/.test(e.name)) continue;
+    let st;
+    try { st = statSync(full); } catch { continue; }
+    if (st.mtimeMs <= since || when(st) <= since) continue;
+    if (sessionIn(full)) {
+      return `a session ${mode} ${new Date(when(st)).toISOString()}: ${full}`;
+    }
+  }
+  return null;
+}
+
+for (const dir of dirs) {
+  const hit = scan(dir, 3);
+  if (hit) {
+    console.log(`active ${hit}`);
+    process.exit(0);
+  }
+}
+console.log('idle');
