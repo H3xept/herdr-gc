@@ -7,6 +7,8 @@ All notable changes appear in this file. The format follows
 
 ### Added
 
+- Install from GitHub with `herdr plugin install H3xept/herdr-gc`. The README
+  says what the install preview shows and how to pin a revision.
 - A README banner GIF of the HUD, and `docs/demo/`, which records it again
   in a fictional world with no herdr and no network.
 

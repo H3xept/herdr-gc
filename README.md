@@ -75,12 +75,25 @@ write, and a deletion is best declared as `suggest`.
 ## Install
 
 ```sh
+herdr plugin install H3xept/herdr-gc
+```
+
+Or link a checkout, to hack on it:
+
+```sh
 git clone https://github.com/H3xept/herdr-gc.git
 herdr plugin link ./herdr-gc
 ```
 
+The plugin runs as your user, with your environment and the full herdr CLI.
+`herdr plugin install` shows the manifest and every command it runs before it
+installs; read them, and pin a revision with `--ref <tag-or-sha>` if you want
+one. See herdr's
+[trust and security guidance](https://herdr.dev/docs/plugins/#trust-and-security)
+and [SECURITY.md](SECURITY.md).
+
 Put the CLI on your `PATH` if you want to type `herdr-gc` instead of
-`path/to/bin/herdr-gc`:
+`path/to/bin/herdr-gc`. From a checkout:
 
 ```sh
 ln -s "$PWD/herdr-gc/bin/herdr-gc" ~/.local/bin/herdr-gc
