@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  ConfigError, fromHerdrEvent, openCheckouts, parseVerdict, parseWorktreeList, planSteps, validateConfig, worktreeId,
+  ConfigError, commonSteps, fromHerdrEvent, openCheckouts, parseVerdict, parseWorktreeList, planSteps, validateConfig, worktreeId,
 } from '../lib/model.mjs';
 
 const problemsOf = (raw) => {
@@ -122,6 +122,13 @@ test('openCheckouts leaves out the workspace that is closing', () => {
   ];
   assert.deepEqual([...openCheckouts(ws, 'w5')], ['/r']);
   assert.deepEqual([...openCheckouts(ws)].sort(), ['/r', '/wt/feat']);
+});
+
+test('commonSteps keeps the step names every config has, in the first config\'s order', () => {
+  const steps = (...names) => names.map((name) => ({ name }));
+  const lists = [steps('stop', 'delete', 'archive'), steps('archive', 'delete'), steps('delete', 'archive', 'x')];
+  assert.deepEqual(commonSteps(lists).map((s) => s.name), ['delete', 'archive']);
+  assert.deepEqual(commonSteps([steps('a'), steps('b')]), []);
 });
 
 test('parseWorktreeList reads git porcelain output', () => {

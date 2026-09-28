@@ -344,7 +344,8 @@ the selected item: the step, the verdict and the log.
 |`y`|accept the selected suggestion (asks first)|
 |`d`|dismiss it|
 |`t`|trust its folder (asks first)|
-|`x`|run a step of the selected worktree's config (picker, then asks first)|
+|`space`|mark the selected worktree, or unmark it|
+|`x`|run a step for the marked worktrees, or for the selected one (picker, then asks first)|
 |`r`|reload|
 |`q`, `esc`|close|
 

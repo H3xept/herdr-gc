@@ -173,11 +173,14 @@ the runner ends the run as `interrupted`. The environment drops inherited
 
 A raw-ANSI popup in the alternate screen. It reads suggestions and runs every
 2 s. `y`, `d` and `t` call `accept`, `dismiss` and `setTrust` after a `y/n`
-confirmation where it matters. `x` opens a picker over the steps of the
-selected worktree's trusted config. It asks herdr which workspaces have the
-checkout open, and the confirmation names them. `y` then queues the step with
-`queueNamedStep`, with `close` when a workspace is open, and starts a detached
-worker: closing the workspace can end the popup. This is `run-step --close
+confirmation where it matters. `space` marks a worktree, not a row: every row of that
+checkout shows the mark. `x` opens a picker over the steps of the marked
+worktrees, or of the selected one when none is marked. With several, it offers
+the steps that every trusted config has, by name (`commonSteps`). It asks herdr
+which workspaces have each checkout open, and one confirmation names them all.
+`y` then queues the step with `queueNamedStep` for each worktree, with `close`
+only where a workspace is open, and starts one detached worker per run:
+closing a workspace can end the popup. Each run is `run-step --close
 --detach`. The HUD adds no operation that the CLI lacks.
 
 ## Tests
