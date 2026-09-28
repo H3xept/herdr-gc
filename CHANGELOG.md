@@ -11,6 +11,9 @@ All notable changes appear in this file. The format follows
   classifier. When a herdr workspace has the checkout open, the prompt names
   it, and `y` closes the workspace first. The step then runs after the close
   steps. If herdr cannot say which workspaces are open, nothing runs.
+- `space` in the HUD marks worktrees. `x` then offers the steps that every
+  marked worktree's config has, and runs the chosen one for all of them in one
+  confirmation. Each gets its own worker, and only the open ones are closed.
 - `run-step --close` closes every herdr workspace on the checkout and waits for
   their close runs before the step runs. `run-step --detach` returns at once.
 - Install from GitHub with `herdr plugin install H3xept/herdr-gc`. The README
