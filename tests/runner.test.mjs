@@ -186,6 +186,15 @@ test('deleting the checkout runs remove once, whoever notices first', () => {
   assert.deepEqual(w.trace(), ['stop close reclaim', 'delete close reclaim', 'goodbye remove']);
 });
 
+test('deleting the checkout another way drops its pending close and sweep suggestions', () => {
+  const wt = setup();
+  w.gc(['sweep', w.repo]);
+  assert.deepEqual(w.pending().map((s) => s.step), ['delete']);
+  assert.equal(w.gc(['run-step', 'delete', wt]).code, 0);
+  assert.ok(!existsSync(wt));
+  assert.deepEqual(w.pending(), []);
+});
+
 test('a recreated checkout at the same path is a new worktree', () => {
   const wt = setup();
   w.gc(['run', 'close', wt]);

@@ -112,8 +112,8 @@ waiters cannot both take it. A claim is a rename from `suggestions/` to
    record.
 3. Check the event against the checkout. `create` and `open` need it present,
    and drop pending `close` and `sweep` suggestions. `close` and `sweep` on a
-   gone checkout run nothing and chain `remove`. `remove` needs it gone and
-   runs once per generation.
+   gone checkout run nothing and chain `remove`. `remove` needs it gone, drops
+   pending `close` and `sweep` suggestions, and runs once per generation.
 4. Resolve the config. `remove` uses the snapshot recorded before, when the
    folder was inside the deleted checkout. No config ends the run as `done`.
 5. An untrusted hash queues one event suggestion, notifies, and ends as
