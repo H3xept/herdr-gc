@@ -136,6 +136,17 @@ the whole event once the folder is trusted. A step suggestion needs its
 snapshot hash still trusted, runs the classifier again for a `when` step, and
 runs the step from the snapshot. A deleted checkout chains `remove`.
 
+### Run-step
+
+`queueNamedStep` queues a run with the step name, the `close` flag and the
+config hash it was queued with. `executeRun` sees the step name and runs it
+without the classifier. With `close`, the worker first closes every herdr
+workspace on the checkout, outside the worktree lock, because the close runs
+that herdr's hook starts need that lock. It waits up to 15 s for such a run
+to appear and up to 15 min for it to end. Then it checks that the pinned hash
+is still trusted, takes the lock and runs the step from the snapshot. When
+herdr cannot list or close a workspace, the run fails and nothing runs.
+
 ### Sweep
 
 `sweep` lists the linked worktrees of the repo, leaves out the ones that a
@@ -162,13 +173,20 @@ the runner ends the run as `interrupted`. The environment drops inherited
 
 A raw-ANSI popup in the alternate screen. It reads suggestions and runs every
 2 s. `y`, `d` and `t` call `accept`, `dismiss` and `setTrust` after a `y/n`
-confirmation where it matters. The HUD adds no operation that the CLI lacks.
+confirmation where it matters. `x` opens a picker over the steps of the
+selected worktree's trusted config. It asks herdr which workspaces have the
+checkout open, and the confirmation names them. `y` then queues the step with
+`queueNamedStep`, with `close` when a workspace is open, and starts a detached
+worker: closing the workspace can end the popup. This is `run-step --close
+--detach`. The HUD adds no operation that the CLI lacks.
 
 ## Tests
 
 `tests/fixture.mjs` builds a temp world per test: a git repo with linked
 worktrees, private plugin directories, and a fake `herdr` script that answers
-`workspace list` from a JSON file and appends notifications to a log. The
+`workspace list` from a JSON file and appends notifications to a log. Its
+`workspace close` drops the workspace from that file and fires the
+`workspace_closed` hook, as herdr does. The
 runner tests drive the real CLI through it. `tests/examples.test.mjs` runs the
 shipped classifier with a fake `gh`. Nothing needs a network, a real herdr or
 GitHub.

@@ -9,13 +9,28 @@ import { join } from 'node:path';
 const BIN = new URL('../bin/herdr-gc', import.meta.url).pathname;
 
 // The fake herdr answers `workspace list` from workspaces.json and appends
-// every notification to notifications.log.
+// every notification to notifications.log. `workspace close <id>` drops the
+// workspace from workspaces.json, appends the id to closed.log, and fires
+// herdr-gc's `workspace_closed` hook, as herdr does.
+const CLOSE = `
+const fs = require('node:fs');
+const [file, id] = process.argv.slice(1);
+const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+const ws = list.find((w) => w.workspace_id === id);
+if (!ws) { console.error('no workspace ' + id); process.exit(1); }
+fs.writeFileSync(file, JSON.stringify(list.filter((w) => w !== ws)));
+console.log(JSON.stringify({ event: 'workspace_closed', data: { workspace_id: id, workspace: ws } }));
+`;
 const FAKE_HERDR = `#!/bin/sh
 dir="$(dirname "$0")"
 case "$1 $2" in
   "workspace list")
     [ -f "$dir/down" ] && { echo "herdr is down" >&2; exit 1; }
     printf '{"id":"x","result":{"type":"workspace_list","workspaces":%s}}\\n' "$(cat "$dir/workspaces.json")" ;;
+  "workspace close")
+    envelope="$("${process.execPath}" -e "$(cat "$dir/close.js")" "$dir/workspaces.json" "$3")" || exit 1
+    printf '%s\\n' "$3" >> "$dir/closed.log"
+    HERDR_PLUGIN_EVENT_JSON="$envelope" "${process.execPath}" "${BIN}" hook > /dev/null ;;
   "notification show")
     shift 2; printf '%s\\n' "$*" >> "$dir/notifications.log" ;;
   *) echo "fake herdr: $*" >&2; exit 1 ;;
@@ -36,6 +51,7 @@ export function makeWorld() {
   writeFileSync(join(w.fake, 'herdr'), FAKE_HERDR);
   chmodSync(join(w.fake, 'herdr'), 0o755);
   writeFileSync(join(w.fake, 'workspaces.json'), '[]');
+  writeFileSync(join(w.fake, 'close.js'), CLOSE);
   const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'init.defaultBranch=main', ...args], { cwd: w.repo, stdio: 'pipe' });
   git('init', '-q');
   git('commit', '-q', '--allow-empty', '-m', 'init');
@@ -71,6 +87,7 @@ export function makeWorld() {
   };
   w.setOpen = (workspaces) => writeFileSync(join(w.fake, 'workspaces.json'), JSON.stringify(workspaces));
   w.notifications = () => { try { return readFileSync(join(w.fake, 'notifications.log'), 'utf8'); } catch { return ''; } };
+  w.closed = () => { try { return readFileSync(join(w.fake, 'closed.log'), 'utf8').split('\n').filter(Boolean); } catch { return []; } };
   w.cleanup = () => rmSync(root, { recursive: true, force: true });
   return w;
 }

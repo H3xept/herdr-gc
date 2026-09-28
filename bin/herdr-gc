@@ -15,7 +15,7 @@ import { notify, openPane } from '../lib/herdr.mjs';
 import { runHud } from '../lib/hud.mjs';
 import { EVENTS, ago, fromHerdrEvent, worktreeId } from '../lib/model.mjs';
 import {
-  accept, dismiss, executeRun, label, latestSuggestions, preview, queueRun, reconcile, runNamedStep, spawnWorker, sweep,
+  accept, dismiss, executeRun, label, latestSuggestions, preview, queueNamedStep, queueRun, reconcile, spawnWorker, sweep,
 } from '../lib/runner.mjs';
 import {
   listRecords, listRuns, listSuggestions, listTrust, logPath, readRun, removeTrust, setTrust,
@@ -37,7 +37,10 @@ LIFECYCLE
   run <event> [path]      run an event now, as the hook would: auto steps
                           run, suggest steps queue, manual steps skip.
                           Events: ${EVENTS.join(', ')}. --detach returns at once.
-  run-step <name> [path]  run one step now, whatever its mode or event
+  run-step <name> [path]  run one step now, whatever its mode or event, without
+                          its classifier. --close first closes every herdr
+                          workspace on the checkout and waits for their close
+                          runs. --detach returns at once.
   sweep [path]            run the sweep event on every linked worktree of the
                           repo that no workspace has open. --dry-run only
                           classifies and prints the plan. --jobs N (default 4)
@@ -136,6 +139,20 @@ async function runVerb(event, pathArg, flags) {
   const done = await executeRun(run.id, { out });
   print(`${done.state}${done.note ? `: ${done.note}` : ''}`);
   if (done.state === 'failed') process.exitCode = 1;
+}
+
+async function runStepVerb(name, pathArg, flags) {
+  if (!name) throw new Error('run-step needs a step name');
+  const t = target(pathArg, flags);
+  const run = queueNamedStep(t, name, { close: Boolean(flags.close) });
+  if (flags.detach) {
+    spawnWorker(run);
+    print(`queued ${name} for ${t.path} (run ${run.id}); herdr-gc log ${run.id}`);
+    return;
+  }
+  const done = await executeRun(run.id, { out });
+  print(`${done.state}${done.note ? `: ${done.note}` : ''}`);
+  if (done.state !== 'done') process.exitCode = 1;
 }
 
 function pickSuggestions(ids, flags) {
@@ -320,13 +337,7 @@ async function main() {
       break;
     }
     case 'run': await runVerb(rest[0], rest[1], flags); break;
-    case 'run-step': {
-      if (!rest[0]) throw new Error('run-step needs a step name');
-      const done = await runNamedStep(target(rest[1], flags), rest[0], { out });
-      print(`${done.state}${done.note ? `: ${done.note}` : ''}`);
-      if (done.state !== 'done') process.exitCode = 1;
-      break;
-    }
+    case 'run-step': await runStepVerb(rest[0], rest[1], flags); break;
     case 'sweep': await sweepVerb(rest[0], flags); break;
     case 'pending': pendingVerb(flags); break;
     case 'accept': await acceptVerb(rest, flags); break;

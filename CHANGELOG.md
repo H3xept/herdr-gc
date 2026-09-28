@@ -7,6 +7,13 @@ All notable changes appear in this file. The format follows
 
 ### Added
 
+- `x` in the HUD runs any step of the selected worktree's config, without its
+  classifier. When a herdr workspace has the checkout open, the prompt names
+  it, and `y` closes the workspace first. The step then runs after the close
+  steps. If herdr cannot say which workspaces are open, nothing runs.
+- `run-step --close` closes every herdr workspace on the checkout and waits for
+  their close runs before the step runs. `run-step --detach` returns at once.
+
 - Install from GitHub with `herdr plugin install H3xept/herdr-gc`. The README
   says what the install preview shows and how to pin a revision.
 - A README banner GIF of the HUD, and `docs/demo/`, which records it again
