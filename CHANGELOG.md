@@ -13,11 +13,16 @@ All notable changes appear in this file. The format follows
   steps. If herdr cannot say which workspaces are open, nothing runs.
 - `run-step --close` closes every herdr workspace on the checkout and waits for
   their close runs before the step runs. `run-step --detach` returns at once.
-
 - Install from GitHub with `herdr plugin install H3xept/herdr-gc`. The README
   says what the install preview shows and how to pin a revision.
 - A README banner GIF of the HUD, and `docs/demo/`, which records it again
   in a fictional world with no herdr and no network.
+
+### Fixed
+
+- `remove` drops the pending `close` and `sweep` suggestions of the gone
+  checkout. Before, a checkout deleted by `run-step` or by hand kept its old
+  `delete checkout` suggestion in the HUD.
 
 ## [0.1.0] - 2026-09-25
 
