@@ -218,7 +218,16 @@ put the cleanup that must happen on `remove`, and use `sweep` to catch up.
 |`manual`|Nothing. Only `herdr-gc run-step <name>` runs it.|
 
 Steps run one at a time, in file order. `herdr-gc run-step` ignores the mode
-and the `when` gate.
+and the `when` gate. `--close` first closes every herdr workspace that has the
+checkout open and waits for the close runs that herdr starts, so the close
+steps run before the named step. If herdr cannot say which workspaces are
+open, nothing runs. `--detach` hands the step to a worker and returns.
+
+Use `run-step --close` to delete a worktree that its classifier keeps:
+
+```sh
+herdr-gc run-step --close "delete checkout" path/to/worktree
+```
 
 ### Classifier protocol
 
@@ -306,7 +315,8 @@ Every operation is a CLI verb. herdr-gc tells you which one to type.
 
   ```text
   run <event> [path]      run an event now, as the hook would (--detach)
-  run-step <name> [path]  run one step now, whatever its mode or event
+  run-step <name> [path]  run one step now, whatever its mode or event, without
+                          its classifier (--close, --detach)
   sweep [path]            the sweep event on every closed worktree (--dry-run, --jobs N)
   pending [--json]        pending suggestions
   accept <id…>            or --latest, --here, --all
@@ -334,6 +344,7 @@ the selected item: the step, the verdict and the log.
 |`y`|accept the selected suggestion (asks first)|
 |`d`|dismiss it|
 |`t`|trust its folder (asks first)|
+|`x`|run a step of the selected worktree's config (picker, then asks first)|
 |`r`|reload|
 |`q`, `esc`|close|
 

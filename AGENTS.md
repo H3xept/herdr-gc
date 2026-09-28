@@ -64,6 +64,10 @@ Every verb except `hud` traps SIGINT, SIGTERM and SIGHUP and calls
 `stopActive` before it exits. A new code path that runs a command must go
 through `runCommand`, so the trap covers it.
 
+`run-step --close`, and `x` in the HUD, close herdr workspaces. They close
+them only after you confirm or pass `--close`, and they wait for the close
+runs before the step runs. When herdr cannot answer, nothing runs.
+
 Nothing replays an event by itself. `reconcile` only marks dead runs
 `interrupted`.
 

@@ -245,3 +245,28 @@ test('sweep suggests for closed worktrees only, and --dry-run queues nothing', (
   w.gc(['sweep', w.repo]);
   assert.deepEqual(w.pending().map((s) => [s.path, s.step]), [[wt, 'delete']]);
 });
+
+test('run-step --close closes the open workspace, lets close run, then runs the step without its classifier', async () => {
+  const wt = setup();
+  w.verdict('keep');
+  w.setOpen([workspaceOn('w3', wt, w.repo)]);
+  const r = w.gc(['run-step', '--close', 'delete', wt]);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(w.closed(), ['w3']);
+  assert.equal(existsSync(wt), false);
+  await waitFor(settled);
+  // The close run's auto step ran first; the delete ignored the keep verdict.
+  assert.deepEqual(w.trace(), ['stop close keep', 'delete close', 'goodbye remove']);
+});
+
+test('run-step --close runs nothing when herdr cannot say which workspaces are open', () => {
+  const wt = setup();
+  w.setOpen([workspaceOn('w3', wt, w.repo)]);
+  writeFileSync(join(w.fake, 'down'), '');
+  const r = w.gc(['run-step', '--close', 'delete', wt]);
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /failed: cannot ask herdr which workspaces are open/);
+  assert.deepEqual(w.closed(), []);
+  assert.deepEqual(w.trace(), []);
+  assert.equal(existsSync(wt), true);
+});
