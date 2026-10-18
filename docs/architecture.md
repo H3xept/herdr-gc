@@ -72,6 +72,12 @@ Every rule that needs no I/O:
 - `EXPECTS` names the worktree state each event needs: `present` for `create`
   and `open`, `closed` for `close` and `sweep`, `gone` for `remove`.
 - `stepEnv` builds the `HERDR_GC_*` environment.
+- `runSummary`, `stepNotice` and `sweepSummary` compose every notification,
+  and return null when the `HERDR_GC_NOTIFY` level says nothing is worth one.
+  `stepMoments` tells which moments (`start`, `success`, `failure`) a step
+  announces: its `notify` key, every moment under `verbose`, none under `off`.
+- `uneventful` marks a finished run that ran, suggested or failed nothing;
+  `pruneRuns` drops those first.
 
 ## `lib/config.mjs`
 
@@ -122,9 +128,11 @@ waiters cannot both take it. A claim is a rename from `suggestions/` to
    closing workspace. Any other one ends the run as `skipped`.
 7. Run the classifier, if the event has one.
 8. Walk the plan. `suggest` queues a suggestion. `auto` checks herdr again for
-   `close` and `sweep`, then runs. A failure stops the rest, unless the step
-   has `continue_on_error`.
-9. Record the result and notify per `HERDR_GC_NOTIFY`.
+   `close` and `sweep`, then runs. A step's `notify` moments send a notice as
+   it starts and ends; one that announced its end is marked `announced`. A
+   failure stops the rest, unless the step has `continue_on_error`.
+9. Record the result and notify with `runSummary`, which leaves announced
+   steps out. An interrupted run says so too. A sweep's runs are `quiet`.
 10. If the checkout is gone now, chain `remove` under the same lock.
 
 ### Accept
@@ -151,12 +159,21 @@ herdr cannot list or close a workspace, the run fails and nothing runs.
 
 `sweep` lists the linked worktrees of the repo, leaves out the ones that a
 workspace has open, and runs the `sweep` event on each, `HERDR_GC_SWEEP_JOBS`
-at a time. `--dry-run` only runs the classifiers and prints the plan.
+at a time. Each run is `quiet`. The CLI then prints `sweepSummary` (steps
+that ran, suggestions, failures, untrusted folders) and sends it as a
+notification when the level asks for it, or always when a herdr action asked
+for the sweep. `--dry-run` only runs the classifiers and prints the plan.
+A `run-step` run reports its result the same way, because the HUD starts it
+detached and may close with the workspace.
 
 ### Reconcile
 
 `reconcile` marks every `queued` or `running` run whose pid is dead as
-`interrupted`. The startup hook and `status` call it. Nothing is replayed.
+`interrupted`, renames the claims of dead processes back into
+`suggestions/`, and forgets records of checkouts removed more than 30 days
+ago. The startup hook and `status` call it. Nothing is replayed. A worker
+whose `executeRun` throws calls `abortRun` first: the run ends `failed` with
+the error as its note, and a notification says so.
 
 ## `lib/exec.mjs`
 
@@ -167,7 +184,8 @@ to the group, then SIGKILL after 5 s. Because the group is not the CLI's own,
 a Ctrl-C does not reach it. So the CLI traps SIGINT, SIGTERM and SIGHUP and
 calls `stopActive`: it signals every active group, refuses new commands, and
 the runner ends the run as `interrupted`. The environment drops inherited
-`HERDR_PLUGIN_*` and `HERDR_GC_*` variables before `stepEnv` adds its own.
+`HERDR_PLUGIN_*` variables before `stepEnv` adds its own `HERDR_GC_*` ones;
+the user's other `HERDR_GC_*` variables pass through.
 
 ## `lib/hud.mjs`
 

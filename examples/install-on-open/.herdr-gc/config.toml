@@ -7,6 +7,10 @@ name = "install"
 on = "create"
 run = "npm ci"
 timeout = "15m"
+# A notification when the install starts, and another when it ends: a long
+# install is visible without the HUD. Leave it out to get only the run's
+# summary at the end.
+notify = "all"
 
 [[step]]
 name = "reinstall"

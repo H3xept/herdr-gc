@@ -1,7 +1,7 @@
 // End-to-end runs through the CLI, in a temp git repo with a fake herdr.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { makeWorld, workspaceOn } from './fixture.mjs';
@@ -278,4 +278,103 @@ test('run-step --close runs nothing when herdr cannot say which workspaces are o
   assert.deepEqual(w.closed(), []);
   assert.deepEqual(w.trace(), []);
   assert.equal(existsSync(wt), true);
+});
+
+test('run-step tells its result as a notification, success and failure alike', () => {
+  const wt = setup();
+  w.setOpen([workspaceOn('w3', wt, w.repo)]);
+  writeFileSync(join(w.fake, 'down'), '');
+  w.gc(['run-step', '--close', 'delete', wt]);
+  assert.match(w.notifications(), /✗ herdr-gc close · feat --body delete: cannot ask herdr which workspaces are open/);
+  rmSync(join(w.fake, 'down'));
+  w.gc(['run-step', 'archive', wt]);
+  assert.match(w.notifications(), /✓ herdr-gc close · feat --body ✓ archive \d+\.\ds/);
+});
+
+test('a step\'s notify moments send their own notices, and the run summary does not repeat them', () => {
+  w = makeWorld();
+  const wt = w.addWorktree('feat');
+  w.writeConfig(wt, {
+    'config.toml': `version = 1
+[[step]]
+name = "install"
+on = "open"
+notify = ["start", "success"]
+run = "true"
+
+[[step]]
+name = "build"
+on = "open"
+run = "true"
+
+[[step]]
+name = "lint"
+on = "open"
+notify = "failure"
+continue_on_error = true
+run = "exit 3"
+`,
+  });
+  const env = { HERDR_GC_TRUST: 'all' };
+  assert.equal(w.gc(['run', 'open', wt], env).code, 1);
+  const runId = w.notifications().match(/herdr-gc log (\S+)/)[1];
+  assert.equal(w.notifications().replace(/\d+\.\ds/g, 'Ns'), [
+    '▶ herdr-gc open · feat --body install started',
+    `log: herdr-gc log ${runId}`,
+    '✓ herdr-gc open · feat --body ✓ install Ns',
+    '✗ herdr-gc open · feat --body ✗ lint (exit 3) Ns',
+    `log: herdr-gc log ${runId}`,
+    '✗ herdr-gc open · feat --body ✓ build Ns',
+    `log: herdr-gc log ${runId}`,
+    '',
+  ].join('\n'));
+
+  // `verbose` announces every step; `off` silences the steps' own moments too.
+  const count = () => (w.notifications().match(/ --body /g) ?? []).length;
+  rmSync(join(w.fake, 'notifications.log'));
+  w.gc(['run', 'open', wt], { ...env, HERDR_GC_NOTIFY: 'verbose' });
+  assert.equal(count(), 6, w.notifications());
+  rmSync(join(w.fake, 'notifications.log'));
+  w.gc(['run', 'open', wt], { ...env, HERDR_GC_NOTIFY: 'off' });
+  assert.equal(w.notifications(), '');
+});
+
+test('a sweep sums its runs up: steps that ran, suggestions, and untrusted configs', () => {
+  const wt = setup();
+  const own = w.addWorktree('own');
+  w.writeConfig(own, { 'config.toml': 'version = 1\n[[step]]\nname = "x"\non = "sweep"\nrun = "true"\n' });
+  w.verdict('keep');
+  w.gc(['sweep', w.repo]);
+  assert.match(w.notifications(), /\? herdr-gc sweep · main --body 2 worktrees, 1 untrusted\napprove: herdr-gc trust <path>/);
+  assert.deepEqual(w.pending().map((s) => [s.kind, s.event, s.path]), [['event', 'sweep', own]], 'the untrusted folder queues its event; keep suggests nothing');
+  // With `attention`, a sweep that only ran steps says nothing; with `all` it does.
+  w.gc(['trust', own]);
+  rmSync(join(w.fake, 'notifications.log'));
+  w.gc(['sweep', w.repo], { HERDR_GC_NOTIFY: 'attention' });
+  assert.equal(w.notifications(), '');
+  w.gc(['sweep', w.repo]);
+  assert.match(w.notifications(), /✓ herdr-gc sweep · main --body 2 worktrees, 1 steps ran/);
+  assert.equal(existsSync(wt), true);
+});
+
+test('an unknown option is an error, not a silent no-op', () => {
+  const wt = setup();
+  const r = w.gc(['sweep', '--dryrun', w.repo]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /unknown option "--dryrun"/);
+  assert.equal(w.pending().length, 0);
+  assert.match(w.gc(['check', '--event', 'nope', wt]).stderr, /unknown event "nope"/);
+});
+
+test('reconcile puts a suggestion claimed by a dead process back in the queue', () => {
+  const wt = setup();
+  w.gc(['run', 'close', wt]);
+  const [s] = w.pending();
+  const claimed = join(w.state, 'claimed');
+  mkdirSync(claimed, { recursive: true });
+  renameSync(join(w.state, 'suggestions', `${s.id}.json`), join(claimed, `${s.id}.999999.json`));
+  assert.equal(w.pending().length, 0);
+  const r = w.gc(['status']);
+  assert.match(r.stdout, /1 claimed suggestion\(s\) went back to the queue: delete feat/);
+  assert.deepEqual(w.pending().map((x) => x.id), [s.id]);
 });

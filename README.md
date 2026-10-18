@@ -186,6 +186,7 @@ mode = "suggest"                 # auto (default) | suggest | manual
 when = ["reclaim"]               # verdicts; needs a classifier for every event in `on`
 timeout = "10m"                  # default 10m; "90s", "20m", "1h", or seconds
 continue_on_error = false        # true: a failure does not stop the later steps
+notify = ["start", "failure"]    # moments this step announces: start, success, failure, or "all"
 ```
 
 The file is strict TOML without floats, dates and inline tables. An unknown key
@@ -295,9 +296,19 @@ rights. Set `HERDR_GC_TRUST=all` only if every repo you open is yours.
 
 Every operation is a CLI verb. herdr-gc tells you which one to type.
 
-- **Notifications.** Each run that did something sends a herdr notification.
-  It lists the verdict, the steps that ran, and the suggestions, with the
-  command that accepts them.
+- **Notifications.** Each run that did something sends a herdr notification
+  when it ends. It lists the verdict, the steps that ran with the time each
+  took, and the suggestions, with the command that accepts them. A failure,
+  an interrupted run, a new suggestion and an untrusted folder are always
+  reported; `HERDR_GC_NOTIFY` picks how much more you hear (see
+  [Settings](#settings)).
+
+  A step can announce itself too, so a 20-minute install is visible while it
+  runs. `notify = ["start", "success", "failure"]`, or `notify = "all"`,
+  sends one notification at each of those moments, with the step's name and,
+  at the end, the time it took. The run's summary then leaves that step out.
+  A sweep sends one summary for all its worktrees; a step's own moments still
+  show, since you asked for them.
 - **Plugin actions.** Bind them to keys in herdr, or run them from the command
   palette:
 
@@ -358,19 +369,26 @@ variable of the same name wins.
 |Key|Default|Values|
 |---|---|---|
 |`HERDR_GC_TRUST`|`ask`|`ask`: trust per folder. `all`: trust every folder.|
-|`HERDR_GC_NOTIFY`|`all`|`all`, `attention` (failures, suggestions, trust), `off`|
+|`HERDR_GC_NOTIFY`|`all`|`off`; `attention`: failures, interruptions, suggestions, untrusted folders; `all`: also a summary of every run that ran a step; `verbose`: also a notice when every step starts and ends|
 |`HERDR_GC_SWEEP_JOBS`|`4`|how many worktrees `sweep` classifies at once|
+
+A value a key does not accept falls back to the default.
 
 ## State
 
 herdr-gc keeps its state in the herdr plugin state directory. Runs and their
-logs live in `runs/` and `logs/`, and the newest 300 runs stay. Suggestions
-live in `suggestions/`, one file each. Trusted snapshots live in `snapshots/`.
+logs live in `runs/` and `logs/`. The newest 300 runs stay, and of the runs
+that ran, suggested or failed nothing (a sweep that kept a worktree, an event
+with no step) only the newest 60, so a sweep over hundreds of worktrees does
+not push the `open` and `close` runs out of history. Suggestions live in
+`suggestions/`, one file each. Trusted snapshots live in `snapshots/`. The
+record of a checkout removed more than 30 days ago is forgotten.
 
 A worker that dies (a reboot, a kill) leaves a `running` record. At herdr
 startup, and on `herdr-gc status`, such a run becomes `interrupted` and you
-get a notification. herdr-gc never replays an event by itself. Run it again
-with `herdr-gc run <event>`.
+get a notification; a suggestion that a dead `accept` had claimed goes back
+to the queue. herdr-gc never replays an event by itself. Run it again with
+`herdr-gc run <event>`.
 
 ## Development
 

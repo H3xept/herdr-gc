@@ -30,24 +30,26 @@ test('a timeout kills the whole process group, not only the shell', async () => 
   }
 });
 
-test('steps do not inherit the plugin environment', async () => {
+test('steps drop the plugin variables, keep the user\'s own HERDR_GC_* ones, and get the run\'s on top', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'herdr-gc-exec-'));
   const fd = openSync(join(dir, 'log'), 'a');
   process.env.HERDR_PLUGIN_EVENT_JSON = '{"secret":1}';
-  process.env.HERDR_GC_TRUST = 'all';
+  process.env.HERDR_GC_SUGGEST = '0'; // a scheduled sweep sets this for its classifier
+  process.env.HERDR_GC_EVENT = 'stale'; // from an outer run; the run's own value wins
   try {
     const r = await runCommand({
-      command: 'echo "[$HERDR_PLUGIN_EVENT_JSON][$HERDR_GC_TRUST][$HERDR_GC_EVENT]"',
+      command: 'echo "[$HERDR_PLUGIN_EVENT_JSON][$HERDR_GC_SUGGEST][$HERDR_GC_EVENT]"',
       cwd: dir,
       env: { HERDR_GC_EVENT: 'close' },
       timeoutMs: 5_000,
       logFd: fd,
       capture: true,
     });
-    assert.equal(r.stdout.trim(), '[][][close]');
+    assert.equal(r.stdout.trim(), '[][0][close]');
   } finally {
     delete process.env.HERDR_PLUGIN_EVENT_JSON;
-    delete process.env.HERDR_GC_TRUST;
+    delete process.env.HERDR_GC_SUGGEST;
+    delete process.env.HERDR_GC_EVENT;
     closeSync(fd);
     rmSync(dir, { recursive: true, force: true });
   }

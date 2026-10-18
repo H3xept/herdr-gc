@@ -56,8 +56,10 @@ trust of the snapshot hash, and, for a `when` step, a new verdict.
 A classifier failure is the verdict `error`, and `error` cannot appear in
 `when`. A broken classifier never unlocks a step.
 
-Commands do not inherit `HERDR_PLUGIN_*` or `HERDR_GC_*` from the plugin
-process. They get the `HERDR_GC_*` variables of `stepEnv` only.
+Commands do not inherit `HERDR_PLUGIN_*` from the plugin process. The
+`HERDR_GC_*` variables of `stepEnv` are always set fresh; any other
+`HERDR_GC_*` variable of the user's environment passes through, because a
+scheduled sweep may set one for its classifier.
 
 Every command runs in its own process group, which a Ctrl-C does not reach.
 Every verb except `hud` traps SIGINT, SIGTERM and SIGHUP and calls
@@ -68,8 +70,19 @@ through `runCommand`, so the trap covers it.
 them only after you confirm or pass `--close`, and they wait for the close
 runs before the step runs. When herdr cannot answer, nothing runs.
 
-Nothing replays an event by itself. `reconcile` only marks dead runs
-`interrupted`.
+Nothing replays an event by itself. `reconcile` marks dead runs
+`interrupted`, puts suggestions that a dead `accept` had claimed back in the
+queue, and forgets records of checkouts removed more than 30 days ago.
+
+Every notification text comes from `lib/model.mjs`: `runSummary`,
+`stepNotice` and `sweepSummary` decide what is said and whether anything is
+said, from the run and the `HERDR_GC_NOTIFY` level. A step that announced
+its own end is marked `announced`, and the run summary leaves it out. A
+sweep's runs are `quiet`: the sweep sends one summary.
+
+`pruneRuns` keeps the newest 300 runs, and of the uneventful ones (nothing
+ran, was suggested or failed) only the newest 60. A sweep over hundreds of
+worktrees must never push the lifecycle runs out of history.
 
 `lib/model.mjs` stays free of I/O. Put a new rule there and test it there.
 

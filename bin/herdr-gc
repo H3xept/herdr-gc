@@ -13,9 +13,9 @@ import { PLUGIN_ID, insideHerdr, pluginContext, settings } from '../lib/env.mjs'
 import { checkoutOf, describeCheckout } from '../lib/git.mjs';
 import { notify, openPane } from '../lib/herdr.mjs';
 import { runHud } from '../lib/hud.mjs';
-import { EVENTS, ago, fromHerdrEvent, worktreeId } from '../lib/model.mjs';
+import { EVENTS, ago, duration, fromHerdrEvent, label, sweepSummary, worktreeId } from '../lib/model.mjs';
 import {
-  accept, dismiss, executeRun, label, latestSuggestions, preview, queueNamedStep, queueRun, reconcile, spawnWorker, sweep,
+  abortRun, accept, dismiss, executeRun, latestSuggestions, preview, queueNamedStep, queueRun, reconcile, spawnWorker, sweep,
 } from '../lib/runner.mjs';
 import {
   listRecords, listRuns, listSuggestions, listTrust, logPath, readRun, removeTrust, setTrust,
@@ -76,14 +76,22 @@ repo root. See README.md.`;
 
 // --- arguments -----------------------------------------------------------------
 
+// Every option a verb accepts. An unknown one is an error: `--dryrun` must
+// not quietly run a real sweep.
+const OPTIONS_WITH_VALUE = ['jobs', 'event'];
+const OPTIONS = [...OPTIONS_WITH_VALUE, 'all', 'close', 'detach', 'dry-run', 'here', 'json', 'latest'];
+
 function parseArgs(argv) {
   const flags = {};
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--jobs' || a === '--event') flags[a.slice(2)] = argv[++i];
-    else if (a.startsWith('--')) flags[a.slice(2)] = true;
-    else rest.push(a);
+    if (!a.startsWith('--')) { rest.push(a); continue; }
+    const name = a.slice(2);
+    if (!OPTIONS.includes(name)) throw new Error(`unknown option "${a}" (options: ${OPTIONS.map((o) => `--${o}`).join(', ')})`);
+    if (!OPTIONS_WITH_VALUE.includes(name)) { flags[name] = true; continue; }
+    if (i + 1 >= argv.length) throw new Error(`${a} needs a value`);
+    flags[name] = argv[++i];
   }
   return { flags, rest };
 }
@@ -255,9 +263,16 @@ async function checkVerb(pathArg, flags) {
   }
 }
 
+/** One line per reconcile finding, for `status` and `reconcile`. */
+function reconcileLines({ interrupted, requeued }) {
+  const lines = [];
+  if (interrupted.length) lines.push(`${interrupted.length} run(s) were interrupted: ${interrupted.map((r) => `${r.event} ${label(r.path)}`).join(', ')}`);
+  if (requeued.length) lines.push(`${requeued.length} claimed suggestion(s) went back to the queue: ${requeued.map((s) => `${s.step ?? s.event} ${label(s.path)}`).join(', ')}`);
+  return lines;
+}
+
 function statusVerb(pathArg, flags) {
-  const lost = reconcile();
-  if (lost.length) print(`marked ${lost.length} run(s) interrupted`);
+  for (const line of reconcileLines(reconcile())) print(line);
   let id = null;
   try { id = worktreeId(target(pathArg, flags).path); } catch { /* not in a checkout */ }
   const record = id && listRecords().find((r) => r.id === id);
@@ -273,8 +288,9 @@ function statusVerb(pathArg, flags) {
   print('');
   for (const r of runs) {
     const ran = (r.steps ?? []).filter((s) => s.action !== 'skip' && s.action !== 'not-reached')
-      .map((s) => `${s.action === 'suggest' ? '?' : s.ok ? '✓' : '✗'}${s.name}`).join(' ');
-    print(`${r.id}  ${r.state.padEnd(11)} ${r.event.padEnd(6)} ${label(r.path).padEnd(24)} ${ago(r.createdAt).padEnd(8)} ${r.verdict ?? ''} ${ran}`);
+      .map((s) => `${s.action === 'suggest' ? '?' : s.ok ? '✓' : '✗'}${s.name}${s.ms === undefined ? '' : ` ${duration(s.ms)}`}`).join('  ');
+    const took = r.startedAt && r.endedAt ? duration(r.endedAt - r.startedAt) : '';
+    print(`${r.id}  ${r.state.padEnd(11)} ${r.event.padEnd(6)} ${label(r.path).padEnd(24)} ${ago(r.createdAt).padEnd(8)} ${took.padEnd(7)} ${r.verdict ?? ''} ${ran}`);
   }
   if (runs.length === 0) print('no runs yet');
 }
@@ -299,9 +315,10 @@ async function sweepVerb(pathArg, flags) {
   const t = target(pathArg, flags);
   const repo = t.repoRoot || t.path;
   const jobs = Number.parseInt(flags.jobs ?? settings().HERDR_GC_SWEEP_JOBS, 10) || 4;
-  print(`${flags['dry-run'] ? 'dry run: ' : ''}sweeping the linked worktrees of ${repo}`);
+  const dryRun = Boolean(flags['dry-run']);
+  print(`${dryRun ? 'dry run: ' : ''}sweeping the linked worktrees of ${repo}`);
   const results = await sweep(repo, {
-    dryRun: Boolean(flags['dry-run']),
+    dryRun,
     jobs,
     out,
     onResult: (r) => {
@@ -309,30 +326,41 @@ async function sweepVerb(pathArg, flags) {
       print(`${r.state.padEnd(10)} ${label(r.path).padEnd(28)} ${(r.verdict ?? '').padEnd(8)} ${r.reason ?? ''}${plan ? `  → ${plan}` : ''}`);
     },
   });
-  const suggested = results.reduce((n, r) => n + (r.plan ?? []).filter((x) => x.action === 'suggest').length, 0);
-  await tell('herdr-gc sweep', [`${results.length} worktrees, ${suggested} suggestions${suggested && !flags['dry-run'] ? ' (herdr-gc pending)' : ''}`]);
+  // The summary goes to the terminal always, and to herdr when the level
+  // asks for it, or always when a herdr action asked for the sweep.
+  const summary = sweepSummary(repo, results, settings().HERDR_GC_NOTIFY, { always: insideHerdr() });
+  print(sweepSummary(repo, results, 'all', { always: true }).body);
+  if (summary && !dryRun) await notify(summary.title, summary.body);
 }
 
 // Steps run in their own process groups, so a Ctrl-C on a foreground run, or
-// a SIGTERM to a worker, reaches only this process. Pass it on, then exit.
-// The run record stays `running`; `reconcile` marks it `interrupted`.
-function forwardSignals() {
+// a SIGTERM to a worker, reaches only this process. Pass it on, give the
+// verb a moment to record the run as `interrupted` and say so, then exit.
+// A run that gets no such moment stays `running`; `reconcile` marks it.
+const SETTLE_AFTER_SIGNAL_MS = 6_000;
+
+function forwardSignals(work) {
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.once(sig, async () => {
       await stopActive();
+      await Promise.race([work.catch(() => {}), new Promise((r) => { setTimeout(r, SETTLE_AFTER_SIGNAL_MS); })]);
       process.exit(128 + constants.signals[sig]);
     });
   }
 }
 
-async function main() {
-  const [verb, ...args] = process.argv.slice(2);
-  const { flags, rest } = parseArgs(args);
-  if (verb !== 'hud') forwardSignals();
+async function dispatch(verb, rest, flags) {
   switch (verb) {
     case 'hook': await hook(); break;
     case 'worker': {
-      const run = await executeRun(rest[0]);
+      let run;
+      try {
+        run = await executeRun(rest[0]);
+      } catch (e) {
+        // The run must not stay `running` until the next reconcile.
+        await abortRun(rest[0], e?.message || String(e));
+        throw e;
+      }
       if (run.state === 'failed') process.exitCode = 1;
       break;
     }
@@ -351,13 +379,10 @@ async function main() {
     case 'status': statusVerb(rest[0], flags); break;
     case 'log': logVerb(rest[0], flags); break;
     case 'reconcile': {
-      const lost = reconcile();
-      if (lost.length) {
-        await tell('✗ herdr-gc', [`${lost.length} run(s) were interrupted: ${lost.map((r) => `${r.event} ${label(r.path)}`).join(', ')}`, 'herdr-gc status']);
-      }
+      const lines = reconcileLines(reconcile());
+      if (lines.length) await tell('✗ herdr-gc', [...lines, 'herdr-gc status']);
       break;
     }
-    case 'hud': process.exit(await runHud()); break;
     case 'open-hud': await openPane(PLUGIN_ID, 'hud'); break;
     case 'version': print(VERSION); break;
     case undefined: case 'help': case '--help': case '-h': print(HELP); break;
@@ -365,6 +390,15 @@ async function main() {
       process.stderr.write(`unknown verb "${verb}"\n\n${HELP}\n`);
       process.exit(2);
   }
+}
+
+async function main() {
+  const [verb, ...args] = process.argv.slice(2);
+  if (verb === 'hud') { process.exit(await runHud()); }
+  const { flags, rest } = parseArgs(args);
+  const work = dispatch(verb, rest, flags);
+  forwardSignals(work);
+  await work;
 }
 
 main().catch(async (e) => {

@@ -20,12 +20,47 @@ All notable changes appear in this file. The format follows
   says what the install preview shows and how to pin a revision.
 - A README banner GIF of the HUD, and `docs/demo/`, which records it again
   in a fictional world with no herdr and no network.
+- A step's `notify` key: `"start"`, `"success"`, `"failure"`, a list of them,
+  or `"all"`. Each moment sends its own herdr notification with the step's
+  name and, at the end, the time it took, so a long install is visible while
+  it runs. The run's summary leaves such a step out.
+- `HERDR_GC_NOTIFY=verbose`: every step announces its start and end, as if it
+  had `notify = "all"`. A setting value the key does not accept falls back to
+  the default.
+- Notifications, `status` and the HUD show how long each step and run took.
+  The HUD's detail pane shows when a run was queued, started and ended.
+- A `run-step` run, which the HUD starts detached, reports its result as a
+  notification: the step's outcome, or why nothing ran.
+- An interrupted run (a signal, a worker that died) sends a notification.
+- A sweep's notification counts the steps that ran, the suggestions, the
+  failures and the untrusted folders. With `HERDR_GC_NOTIFY=all` it is sent
+  whenever a step ran; from the `sweep-here` action it is always sent.
+- `reconcile` and `status` put a suggestion that a dead `accept` had claimed
+  back in the queue, and forget the records of checkouts removed more than
+  30 days ago.
+- An unknown option, such as `--dryrun`, is an error. Before, `sweep
+  --dryrun` ran a real sweep.
 
 ### Fixed
 
 - `remove` drops the pending `close` and `sweep` suggestions of the gone
   checkout. Before, a checkout deleted by `run-step` or by hand kept its old
   `delete checkout` suggestion in the HUD.
+- Steps and classifiers see the user's own `HERDR_GC_*` variables again.
+  Before, every `HERDR_GC_*` variable was dropped, so a scheduled sweep could
+  not pass `HERDR_GC_SUGGEST=0` to its classifier, and queued the delete
+  suggestions it was told not to.
+- A sweep over hundreds of worktrees no longer pushes the `open` and `close`
+  runs out of history. Of the runs that ran, suggested or failed nothing,
+  only the newest 60 stay; the cap of 300 runs applies to the rest.
+- A worker that crashes ends its run as `failed`, with the error as the note,
+  instead of leaving it `running` until the next reconcile.
+- A `sweep` run that found an untrusted folder, or an `auto` step that ran
+  during a sweep, is counted in the sweep's notification. Before, both were
+  silent.
+- A worker that cannot start (the system is out of processes) ends its run
+  as `failed` with the reason. Before, the run stayed `queued`, and a
+  `run-step --close` waited up to 15 minutes for it.
 
 ## [0.1.0] - 2026-09-25
 
